@@ -1,270 +1,141 @@
-# LM-KBC: Knowledge Base Construction from Pre-trained Language Models (4th Edition)
+# Self‑Retrieval‑Augmented Generation based on Qwen3‑8B
+**Self‑Retrieval‑Augmented Generation for the LM‑KBC 2025 Challenge**
 
-This repository hosts data for the LM-KBC challenge at ISWC
-2025 (https://lm-kbc.github.io/challenge2025/).
+This repository contains our submission to the **4ᵗʰ LM‑KBC Challenge** at ISWC 2025.  
+Our system combines the 8‑billion‐parameter **Qwen3** language model with a *Self‑Retrieval‑Augmented Generation (Self‑RAG)* strategy: for each subject–relation query, the model first generates a focused **entity description**, then injects this context back into a tailored prompt to improve object prediction quality.
 
-This repository contains:
+---
 
-- The dataset for the challenge
-- Evaluation script
-- Baselines
-- Instructions for submitting your predictions
+## Repository Layout
 
-## Table of contents
+```
+├── models/
+│ └── baseline_qwen_3_model.py # Thin wrapper around HuggingFace Qwen3‑8B
+├── self_rag_model.py # Self‑RAG logic (description + prompt)
+├── configs/
+│ └── config.yaml # Default inference configuration
+├── prompt_templates/
+│ └── question_prompts.csv # Relation‑specific prompt stems
+├── data/ # Place LM‑KBC splits here
+│ ├── train.jsonl
+│ └── val.jsonl
+├── main.py # CLI entry point
+├── requirements.txt # Python dependencies
+└── README.md # (you are here)
+```
+---
 
-1. [News](#news)
-2. [Challenge overview](#challenge-overview)
-3. [Dataset](#dataset)
-4. [Evaluation metrics](#evaluation-metrics)
-5. [Getting started](#getting-started)
-    - [Setup](#setup)
-    - [Baselines](#baselines)
-        - [Baseline: Qwen3-8B](#baseline-qwen3-8b)
-    - [How to structure your prediction file](#how-to-structure-your-prediction-file)
-    - [Submit your predictions to CodaLab](#submit-your-predictions-to-codalab)
+## Quick Start
 
-## News
+### 1. Set up
 
-- 01.05.2025: Release of dataset
+```bash
+git clone https://github.com/JingboHH/self-rag-qwen3.git
+cd self-rag-qwen3
 
-## Challenge overview
+# create & activate Python 3.11 env (conda or venv)
+python -m venv self-rag-qwen3
+source self-rag-qwen3/bin/activate
 
-Pretrained language models (LMs) like ChatGPT have advanced a range of semantic
-tasks and have also shown promise for
-knowledge extraction from the models itself. Although several works have
-explored this ability in a setting called
-probing or prompting, the viability of knowledge base construction from LMs
-remains under-explored. In the 3rd edition
-of this challenge, we invite participants to build actual disambiguated
-knowledge bases from LMs, for given subjects and
-relations. In crucial difference to existing probing benchmarks like
-LAMA ([Petroni et al., 2019](https://arxiv.org/pdf/1909.01066.pdf)), we make no
-simplifying assumptions on relation
-cardinalities, i.e., a subject-entity can stand in relation with zero, one, or
-many object-entities. 
+pip install -r requirements.txt
+```
 
-Unlike earlier editions, this version does **not require entity disambiguation**. Instead, we
-evaluate the predicted object strings directly using string match metrics.
+GPU memory
+Qwen3‑8B requires ≈16 GB (FP16).
+If resources are limited, set `use_quantization: true` in `config.yaml`.
 
-> Formally, given the input subject-entity (s) and relation (r), the task is to
-> predict all the correct
-> object-entities ({o<sub>1</sub>, o<sub>2</sub>, ..., o<sub>k</sub>}) using LM
-> probing.
+### 2. Configure
 
-## Dataset
+configs/self-rag-qwen-3.yaml (excerpt):
 
-Number of unique subject-entities in the data splits.
+```yaml
+model: "self_rag"
+llm_path: "Qwen/Qwen3-8B"
+max_new_tokens: 32768
 
-<table>
-<thead>
-    <tr>
-        <th>Relation</th>
-        <th>Train</th>
-        <th>Val</th>
-        <th>Test</th>
-        <th>Special features</th>
-    </tr>
-</thead>
-<tbody>
-    <tr>
-        <td>countryLandBordersCountry</td>
-        <td>68</td>
-        <td>68</td>
-        <td>67</td>
-        <td>Null values possible</td>
-    </tr>
-    <tr>
-        <td>personHasCityOfDeath</td>
-        <td>100</td>
-        <td>100</td>
-        <td>100</td>
-        <td>Null values possible</td>
-    </tr>
-    <tr>
-        <td>hasCapacity</td>
-        <td>100</td>
-        <td>100</td>
-        <td>100</td>
-        <td>Object is numeric</td>
-    </tr>
-    <tr>
-        <td>awardWonBy</td>
-        <td>10</td>
-        <td>10</td>
-        <td>10</td>
-        <td>Many objects per subject</td>
-    </tr>
-    <tr>
-        <td>companyTradesAtStockExchange</td>
-        <td>100</td>
-        <td>100</td>
-        <td>100</td>
-        <td>Null values possible</td>
-    </tr>
-        <tr>
-        <td>hasArea</td>
-        <td>100</td>
-        <td>100</td>
-        <td>100</td>
-        <td>Object is numeric (square km)</td>
-    </tr>
-</tbody>
-</table>
+# Self‑RAG
+use_description: true
+description_max_tokens: 150
 
-## Evaluation metrics
+# Few‑shot in‑context examples
+few_shot: 5
+```
 
-We evaluate the predictions using macro precision, recall, and F1-score.
-See the evaluation script ([evaluate.py](evaluate.py)) for more details.
+Adjust paths to `train_data_file` and other parameters as needed.
+
+### 3. Run Inference
+
+```bash
+python main.py --config configs/self-rag-qwen-3.yaml \
+               --input data/val.jsonl \
+               --output results/self-rag-qwen3-val.jsonl
+```
+
+Evaluate on the validation split:
 
 ```bash
 python evaluate.py \
   -g data/val.jsonl \
-  -p data/testrun-XYZ.jsonl
+  -p results/selfrag-qwen3-val.jsonl
+```
+---
+
+## Method Overview
+
+```pgsql
+Subject + Relation
+        │
+        ▼
+1️⃣  Entity Description
+    • Relation‑guided prompt
+    • max 150 tokens
+        │
+        ▼
+2️⃣  Enriched Prompt
+    “Given this information about <S>: <DESC> … ?”
+        │
+        ▼
+3️⃣  Qwen3‑8B Inference (temperature 0.1)
+        │
+        ▼
+4️⃣  Post‑processing
+    • Clean <think> tags
+    • Regex for numeric relations
+    • Split / filter candidate entities
+        │
+        ▼
+Predicted Object(s)
 ```
 
-Parameters: ``-g`` (the ground truth file), ``-p`` (the prediction file).
+Key idea: the self‑generated description grounds the model, yielding higher precision especially for relations with many or numeric objects.
 
-## Getting started
+---
 
-### Setup
+# Validation Results
 
-1. Clone this repository:
+| Relation                     |   Macro P  |   Macro R  |  Macro F1  |
+| ---------------------------- | :--------: | :--------: | :--------: |
+| awardWonBy                   |   0.7000   |   0.0000   |   0.0000   |
+| companyTradesAtStockExchange |   0.5950   |   0.4392   |   0.3282   |
+| countryLandBordersCountry    |   0.6977   |   0.8690   |   0.6640   |
+| hasArea                      |   0.1600   |   0.1400   |   0.1400   |
+| hasCapacity                  |   0.2700   |   0.0000   |   0.0000   |
+| personHasCityOfDeath         |   0.4200   |   0.5700   |   0.2900   |
+| **All Relations**            | **0.4162** | **0.3640** | **0.2531** |
 
-    ```bash
-    mkdir lm-kbc-2025
-    cd lm-kbc-2025
-    git clone https://github.com/lm-kbc/dataset2025.git
-    cd dataset2025
-    ```
+# Test Results
 
-2. Create a virtual environment and install the requirements:
+| Relation                     |   Macro P  |   Macro R  |  Macro F1  |
+| ---------------------------- | :--------: | :--------: | :--------: |
+| awardWonBy                   |   0.5611   |   0.0391   |   0.0629   |
+| companyTradesAtStockExchange |   0.6050   |   0.5343   |   0.4015   |
+| countryLandBordersCountry    |   0.7724   |   0.8049   |   0.7012   |
+| hasArea                      |   0.1600   |   0.1100   |   0.1100   |
+| hasCapacity                  |   0.2100   |   0.0200   |   0.0200   |
+| personHasCityOfDeath         |   0.3900   |   0.6700   |   0.3033   |
+| **All Relations**            | **0.4064** | **0.3936** | **0.2748** |
 
-    ```bash
-    conda create -n lm-kbc-2025 python=3.11
-    ```
 
-    ```bash
-    conda activate lm-kbc-2025
-    pip install -r requirements.txt
-    ```
 
-3. Write your own solution and generate predictions (format described
-   in [How to structure your prediction file](#how-to-structure-your-prediction-file)).
-4. Evaluate your predictions using the evaluation script
-   (see [Evaluation metrics](#evaluation-metrics)).
-5. Submit your solutions to the organizers
-   (see [Call for Participants](https://lm-kbc.github.io/challenge2025/#call-for-participants)),
-   and/or submit your predictions to CodaLab
-   (see [Submit your predictions to CodaLab](#submit-your-predictions-to-codalab)).
 
-### Baselines
 
-We provide baselines using Qwen3-8B model ([models/baseline_qwen_3_model.py](models/baseline_qwen_3_model.py)),
-
-You can run these baselines via the [baseline.py](baseline.py) script and
-providing it with the corresponding configuration file. We provide example
-configuration files for the baselines in the [configs](configs) directory.
-
-#### Baseline: Qwen3-8B
-
-Config
-file: [configs/baseline-qwen-3.yaml](configs/baseline-qwen-3.yaml)
-
-```bash
-python baseline.py -c configs/baseline-qwen-3.yaml -i data/val.jsonl
-python evaluate.py -g data/val.jsonl -p output/baseline-qwen-3.jsonl
-```
-
-Results (validation, without entity disambiguation):
-
-```text
-                              macro-p  macro-r  macro-f1  micro-p  micro-r  micro-f1  avg. #preds  #empty preds
-awardWonBy                      0.173    0.027     0.043    0.173    0.021     0.038       18.500             0
-companyTradesAtStockExchange    0.230    0.561     0.215    0.248    0.329     0.283        1.050             0
-countryLandBordersCountry       0.653    0.873     0.628    0.787    0.782     0.784        2.618             0
-hasArea                         0.180    0.180     0.180    0.180    0.180     0.180        1.000             0
-hasCapacity                     0.030    0.030     0.030    0.030    0.030     0.030        1.000             0
-personHasCityOfDeath            0.100    0.550     0.100    0.100    0.179     0.128        1.000             0
-*** All Relations ***           0.209    0.401     0.200    0.298    0.114     0.165        1.607             0
-```
-
-Results (validation, with entity disambiguation):
-
-```text
-                              macro-p  macro-r  macro-f1  micro-p  micro-r  micro-f1  avg. #preds  #empty preds
-awardWonBy                      0.512    0.032     0.050    0.205    0.024     0.044       17.600             3
-companyTradesAtStockExchange    0.800    0.601     0.515    0.596    0.392     0.473        0.520            53
-countryLandBordersCountry       0.891    0.877     0.852    0.870    0.788     0.827        2.382            16
-hasArea                         0.180    0.180     0.180    0.180    0.180     0.180        1.000             0
-hasCapacity                     0.030    0.030     0.030    0.030    0.030     0.030        1.000             0
-personHasCityOfDeath            0.590    0.550     0.390    0.196    0.182     0.189        0.510            49
-*** All Relations ***           0.472    0.410     0.356    0.373    0.120     0.182        1.341           121
-```
-
-**Results (test, without entity disambiguation):**
-
-```text
-                              macro-p  macro-r  macro-f1  micro-p  micro-r  micro-f1  avg. #preds  #empty preds
-awardWonBy                      0.240    0.090     0.117    0.261    0.072     0.113       15.300             0
-companyTradesAtStockExchange    0.185    0.591     0.167    0.208    0.286     0.240        1.060             0
-countryLandBordersCountry       0.768    0.812     0.702    0.892    0.764     0.823        3.463             0
-hasArea                         0.240    0.240     0.240    0.240    0.240     0.240        1.000             0
-hasCapacity                     0.040    0.040     0.040    0.040    0.040     0.040        1.000             0
-personHasCityOfDeath            0.080    0.650     0.080    0.078    0.186     0.110        1.020             0
-*** All Relations ***           0.227    0.435     0.212    0.385    0.267     0.315        1.662             0
-```
-
-### How to structure your prediction file
-
-Your prediction file should be in the jsonl format.
-Each line of a valid prediction file contains a JSON object which must
-contain at least 3 fields to be used by the evaluation script:
-
-- ``SubjectEntity``: the subject entity (string)
-- ``Relation``: the relation (string)
-- ``ObjectEntities``: the predicted object entity strings
-- ``ObjectEntitiesID``: the predicted object entity IDs, which should be a list
-  of Wikidata IDs (strings).
-
-This is an example of how to write a prediction file:
-
-```python
-import json
-
-# Dummy predictions
-predictions = [
-    {
-        "SubjectEntity": "Dominican republic",
-        "Relation": "CountryBordersWithCountry",
-        "ObjectEntities": ["Haiti", "Venezuela", "United States", "Germany"],
-        "ObjectEntitiesID": ["Q790", "Q717", "Q30", "Q183"]
-    },
-    {
-        "SubjectEntity": "Jiaxing Stadium in Jiaxing",
-        "Relation": "hasCapacity",
-        "ObjectEntities": ["35000"],
-        "ObjectEntitiesID": ["35000"]
-    },
-    {
-        "SubjectEntity": "Mauritius",
-        "Relation": "CountryBordersWithCountry",
-        "ObjectEntities": [],
-        "ObjectEntitiesID": []
-    }
-
-]
-
-fp = "./path/to/your/prediction/file.jsonl"
-
-with open(fp, "w") as f:
-    for pred in predictions:
-        f.write(json.dumps(pred) + "\n")
-```
-
-### Submit your predictions to CodaLab
-
-Links to the CodaLab competition leaderboard (test): https://codalab.lisn.upsaclay.fr/competitions/23218
-
-To participate in the competition and join the leaderboard, sign up for your team account at [CodaLab](https://codalab.lisn.upsaclay.fr/competitions/23218).
-Then register for the competition and submit your predictions at Participate -> Submit / View Results.
-The Qwen3-8B baseline results were provided by the user _lm-kbc_ on the leaderboard, with a score of 0.2116.
